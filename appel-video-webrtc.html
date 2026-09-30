@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#07151d">
+  <title>Appel audio vidéo WebRTC</title>
+  <style>
+    :root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#f4f7f8;background:#07151d;color-scheme:dark}
+    *{box-sizing:border-box}body{margin:0;padding:18px;min-height:100vh;background:radial-gradient(circle at top,#143646,#07151d 55%)}
+    main{max-width:760px;margin:auto}.tag{color:#65e3b6;font-size:12px;font-weight:800;letter-spacing:2px}h1{margin:5px 0 8px;font-size:clamp(28px,8vw,44px)}p{color:#bed0d7;line-height:1.45}
+    .panel{background:#102630d9;border:1px solid #284550;border-radius:20px;padding:15px;margin:14px 0;box-shadow:0 14px 40px #0004}.videos{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .video-box{position:relative;aspect-ratio:3/4;border-radius:16px;overflow:hidden;background:#02090d}.video-box span{position:absolute;z-index:2;left:10px;bottom:8px;background:#0009;padding:5px 8px;border-radius:9px;font-size:12px}video{width:100%;height:100%;object-fit:cover;background:#02090d}#localVideo{transform:scaleX(-1)}
+    .bar{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.bar>*{flex:1 1 130px}button,textarea{font:inherit}button{border:1px solid #3a5b64;background:#1c3a43;color:white;border-radius:13px;padding:12px;cursor:pointer;font-weight:700}button.primary{background:#087f5b;border-color:#22b98b}button.danger{background:#802d3b;border-color:#b84b5d}button:disabled{opacity:.45;cursor:default}
+    textarea{display:block;width:100%;min-height:105px;margin:8px 0 12px;padding:11px;border-radius:12px;border:1px solid #35545e;background:#07151d;color:white;font-size:12px;overflow-wrap:anywhere}label{display:block;margin-top:12px;font-weight:700}small{display:block;color:#9fb5bd;line-height:1.45}#status{color:#70e9bd;font-weight:800;min-height:24px}
+    @media(max-width:540px){body{padding:12px}.videos{grid-template-columns:1fr}.video-box{aspect-ratio:16/10}.video-box:first-child{position:absolute;width:105px;height:145px;aspect-ratio:auto;right:24px;top:105px;z-index:3;border:2px solid #69dcb5;box-shadow:0 8px 25px #0009}.panel{padding:12px}}
+  </style>
+</head>
+<body>
+<main>
+  <span class="tag">APPEL PRIVÉ • WEBRTC</span>
+  <h1>Audio & vidéo</h1>
+  <p>Les deux personnes ouvrent la même page. Le premier crée l’invitation et le second y répond.</p>
+
+  <section class="panel videos">
+    <div class="video-box"><span>Moi</span><video id="localVideo" autoplay muted playsinline></video></div>
+    <div class="video-box"><span>Mon ami</span><video id="remoteVideo" autoplay playsinline></video></div>
+  </section>
+
+  <section class="panel">
+    <div id="status" role="status">Appuie sur « Activer caméra ».</div>
+    <div class="bar">
+      <button id="start" class="primary">Activer caméra</button>
+      <button id="mic" disabled>Micro : activé</button>
+      <button id="camera" disabled>Caméra : activée</button>
+      <button id="switch" disabled>Changer de caméra</button>
+      <button id="hangup" class="danger" disabled>Raccrocher</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Connexion des deux téléphones</h2>
+    <div class="bar">
+      <button id="host" disabled>1. Créer l’invitation</button>
+      <button id="join" disabled>2. Répondre</button>
+    </div>
+    <label for="incoming">Code reçu de ton ami</label>
+    <textarea id="incoming" placeholder="Colle ici l’invitation ou la réponse reçue sur WhatsApp"></textarea>
+    <button id="accept" disabled>3. Accepter la réponse</button>
+    <label for="outgoing">Code à envoyer à ton ami</label>
+    <textarea id="outgoing" readonly placeholder="Ton code apparaîtra ici"></textarea>
+    <button id="copy">Copier le code</button>
+    <small>La caméra exige une page HTTPS, comme GitHub Pages. Le serveur STUN aide les téléphones à se trouver. Certains réseaux protégés nécessitent aussi un serveur TURN.</small>
+  </section>
+</main>
+
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const rtcConfig={iceServers:[{urls:'stun:stun.l.google.com:19302'}]};
+let localStream=null,pc=null,facingMode='user',busy=false;
+
+function status(message){$('status').textContent=message}
+function setConnectionButtons(enabled){$('host').disabled=!enabled;$('join').disabled=!enabled;$('accept').disabled=!enabled}
+
+async function openMedia(){
+  if(localStream)return;
+  if(!navigator.mediaDevices?.getUserMedia)throw Error('Caméra indisponible. Ouvre cette page en HTTPS dans Chrome ou Safari.');
+  localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:{facingMode,width:{ideal:1280},height:{ideal:720}}});
+  $('localVideo').srcObject=localStream;
+  $('start').disabled=true;$('mic').disabled=false;$('camera').disabled=false;$('switch').disabled=false;$('hangup').disabled=false;
+  setConnectionButtons(true);status('Caméra prête. Crée une invitation ou colle celle de ton ami.');
+}
+
+function createPeer(){
+  if(pc)pc.close();
+  pc=new RTCPeerConnection(rtcConfig);
+  localStream.getTracks().forEach(track=>pc.addTrack(track,localStream));
+  pc.ontrack=e=>{$('remoteVideo').srcObject=e.streams[0];$('remoteVideo').play().catch(()=>{})};
+  pc.onconnectionstatechange=()=>{
+    if(!pc)return;
+    const s=pc.connectionState;
+    if(s==='connected')status('Connectés ! Appel en cours.');
+    else if(s==='failed')status('Connexion échouée. Recréez les codes ou essayez un autre réseau.');
+    else if(s==='disconnected')status('Connexion interrompue…');
+    else if(s==='closed')status('Appel terminé.');
+    else status('Connexion : '+s);
+  };
+  return pc;
+}
+
+function waitForIce(peer){
+  if(peer.iceGatheringState==='complete')return Promise.resolve();
+  return new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>{cleanup();reject(Error('La préparation de la connexion a pris trop de temps. Réessaie.'))},20000);
+    function cleanup(){clearTimeout(timer);peer.removeEventListener('icegatheringstatechange',check)}
+    function check(){if(peer.iceGatheringState==='complete'){cleanup();resolve()}}
+    peer.addEventListener('icegatheringstatechange',check);check();
+  });
+}
+
+function encode(description){return 'CALL1.'+btoa(JSON.stringify({v:1,type:description.type,sdp:description.sdp}))}
+function decode(value,expected){
+  value=value.trim();
+  if(!value.startsWith('CALL1.')||value.length>150000)throw Error('Code non reconnu. Copie le code complet.');
+  const data=JSON.parse(atob(value.slice(6)));
+  if(data.v!==1||data.type!==expected||typeof data.sdp!=='string')throw Error(expected==='offer'?'Il faut coller une invitation.':'Il faut coller une réponse.');
+  return {type:data.type,sdp:data.sdp};
+}
+
+async function run(action){
+  if(busy)return;busy=true;setConnectionButtons(false);
+  try{await action()}catch(e){status('Erreur : '+(e.message||e))}
+  finally{busy=false;if(localStream)setConnectionButtons(true)}
+}
+
+$('start').onclick=()=>run(openMedia);
+$('host').onclick=()=>run(async()=>{
+  const peer=createPeer();
+  await peer.setLocalDescription(await peer.createOffer());
+  await waitForIce(peer);
+  $('outgoing').value=encode(peer.localDescription);
+  status('Invitation prête. Envoie ce code, puis colle la réponse reçue.');
+});
+$('join').onclick=()=>run(async()=>{
+  const offer=decode($('incoming').value,'offer'),peer=createPeer();
+  await peer.setRemoteDescription(offer);
+  await peer.setLocalDescription(await peer.createAnswer());
+  await waitForIce(peer);
+  $('outgoing').value=encode(peer.localDescription);
+  status('Réponse prête. Renvoie ce code au créateur de l’appel.');
+});
+$('accept').onclick=()=>run(async()=>{
+  if(!pc||pc.signalingState!=='have-local-offer')throw Error('Crée d’abord une invitation.');
+  await pc.setRemoteDescription(decode($('incoming').value,'answer'));
+  status('Connexion en cours…');
+});
+$('copy').onclick=async()=>{
+  const value=$('outgoing').value;if(!value)return;
+  try{await navigator.clipboard.writeText(value);status('Code copié. Envoie-le sur WhatsApp.');}
+  catch(e){$('outgoing').focus();$('outgoing').select();status('Maintiens le code appuyé puis choisis Copier.');}
+};
+$('mic').onclick=()=>{const track=localStream?.getAudioTracks()[0];if(!track)return;track.enabled=!track.enabled;$('mic').textContent='Micro : '+(track.enabled?'activé':'coupé')};
+$('camera').onclick=()=>{const track=localStream?.getVideoTracks()[0];if(!track)return;track.enabled=!track.enabled;$('camera').textContent='Caméra : '+(track.enabled?'activée':'coupée')};
+$('switch').onclick=()=>run(async()=>{
+  facingMode=facingMode==='user'?'environment':'user';
+  const next=await navigator.mediaDevices.getUserMedia({video:{facingMode},audio:false}),newTrack=next.getVideoTracks()[0],oldTrack=localStream.getVideoTracks()[0];
+  localStream.removeTrack(oldTrack);oldTrack.stop();localStream.addTrack(newTrack);$('localVideo').srcObject=localStream;
+  const sender=pc?.getSenders().find(s=>s.track?.kind==='video');if(sender)await sender.replaceTrack(newTrack);
+});
+$('hangup').onclick=()=>{
+  if(pc)pc.close();pc=null;$('remoteVideo').srcObject=null;$('incoming').value='';$('outgoing').value='';status('Appel terminé. Tu peux créer une nouvelle invitation.');
+};
+</script>
+</body>
+</html>
